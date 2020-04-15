@@ -5,7 +5,7 @@ import math
 import os
 
 # Path of parameter file
-dirpath_parm = '../Raw Data/2011_09_26 _cal/calib_cam_to_cam.txt'
+dirpath_parm = '../Raw Data/2011_09_26_cali/calib_cam_to_cam.txt'
 # Path of Raw Image
 dirpath_img = ['../Synced Data/2011_09_26/2011_09_26_drive_0001_sync/image_00/data/',
                 '../Synced Data/2011_09_26/2011_09_26_drive_0001_sync/image_01/data/',
@@ -95,12 +95,14 @@ def rand_transformation(rot, trans, R_threshold, T_threshold, ROTATION=True, TRA
     :return:
     """
     if ROTATION:
+        added_rot = R_threshold * np.random.rand(3, 1)
         rot_vec = cv2.Rodrigues(rot)[0]
-        new_rot_vec = rot_vec + R_threshold * np.random.uniform(low=-1, high=1, size=(3, 1))
+        new_rot_vec = rot_vec + added_rot
         rot = cv2.Rodrigues(new_rot_vec)[0]
     if TRANSLATION:
-        trans = trans + T_threshold * np.random.uniform(low=-1, high=1, size=(3, 1))
-    return rot, trans
+        added_trans = T_threshold * np.random.rand(3, 1)
+        trans = trans + added_trans
+    return rot, trans, added_rot, added_trans
 
 
 

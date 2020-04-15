@@ -3,42 +3,11 @@ import numpy as np
 import cv2
 from numpy.linalg import inv
 import math
+import numba
+import warnings
 
-
-
-def get_homography(R1, R2, K1, K2):
-    """
-    Get Hmography Matrix according to Rotation of imaging plane
-    :param R_rec:
-    :param R1: Rotation of cam2
-    :param R2: Rotation of cam3
-    :param K1: intrinsic parameter of cam2
-    :param K2: intrinsic parameter of cam3
-    :return:
-    """
-    h1 = np.dot(np.dot(K1, R1), np.linalg.inv(K1))
-    h2 = np.dot(np.dot(K2, R2), np.linalg.inv(K2))
-    return [h1, h2]
-
-
-def img_rectify(im1, im2, rot1, rot2, trans1, trans2, dist1, dist2):
-    """
-    Get rectified image using cv2.warpPerspective
-    :param im1: raw image of cam2
-    :param im2: raw image of cam3
-    :param R1: homography matrix of cam2
-    :param R2: homography matrix of cam3
-    :param T1: translation of cam2
-    :param T2: translation of cam3
-    :return:
-    """
-    R = np.dot(inv(rot1), rot2)
-    T = trans1 - trans2
-    R1, R2, P1, P2, _, _, _ = cv2.stereoRectify(rot1, dist1, rot2, dist2, np.shape(im1[:, :, 0]), R, T)
-    [h1, h2] = get_homography(R1, R2, K[:, :, 2], K[:, :, 3])
-    img1 = cv2.warpPerspective(im1, h1, (HEIGHT, WIDTH))
-    img2 = cv2.warpPerspective(im2, h2, (HEIGHT, WIDTH))
-    return img1, img2
+# Ignore Warnings
+warnings.filterwarnings('ignore')
 
 
 def int2str(num, min_len):
@@ -53,6 +22,133 @@ def int2str(num, min_len):
     return s
 
 
+def create_mask(image):
+    '''
+    Create a mask for empty pixels in image
+    Resulting mask has black (0) for non-empty pixels
+    '''
+    # define range of empty pixels
+    lower_val = np.array([0,0,0])
+    upper_val = np.array([0,0,0])
+
+    # Threshold the HSV image to get only black colors
+    mask = cv2.inRange(image, lower_val, upper_val)
+    return mask
+
+
+@numba.jit()
+def crop_largest_rectangle_with_original_ratio(image):
+    '''
+        Idea Adapted from the link:
+        https://stackoverflow.com/questions/7332065/find-the-largest-convex-black-area-in-an-image
+    '''
+    mask = create_mask(image)
+
+    # storing max consecutive non-empty pixels
+    h = np.zeros((image.shape[0], image.shape[1],))
+
+    # check maximum consecutive pixels, column by column, from bottom to top
+    for j in range(mask.shape[1]):
+        consecutive = 0
+        for i in range(mask.shape[0] - 1, -1, -1):
+            # if the pixel is empty, continue to next
+            if mask[i, j] == 255:
+                consecutive = 0
+            else:
+                consecutive += 1
+            h[i, j] = consecutive
+    # storing max width and area found for each pixel
+    w = np.zeros((image.shape[0], image.shape[1],))
+    a = np.zeros((image.shape[0], image.shape[1],))
+    # check consecutive rows with higher
+    for i in range(mask.shape[0]):
+        for j in range(mask.shape[1]):
+            if mask[i, j] == 255:
+                continue
+            current_height = h[i, j]
+            current_width = 1
+            while h[i, j + current_width - 1] >= current_height:
+                current_width += 1
+                if j + current_width - 1 >= mask.shape[1]:
+                    break
+            w[i, j] = current_width
+            a[i, j] = current_height * current_width
+
+    # index of top left corner of the rectangle found with max area
+    index = np.unravel_index(a.argmax(), a.shape)
+
+    # keep original image width:height ratio
+    if h[index] / mask.shape[0] * mask.shape[1] > w[index]:
+        # rectangle taller than original image
+        # shift the height down to make the cropped region centered
+        shift = int((h[index] - w[index] / mask.shape[1] * mask.shape[0]) / 2)
+        return (index[0] + shift, index[1],
+                int(w[index] / mask.shape[1] * mask.shape[0]), int(w[index]))
+    # rectangle wider than original image
+    shift = int((w[index] - h[index] / mask.shape[0] * mask.shape[1]) / 2)
+    return (index[0], index[1] + shift,
+            int(h[index]), int(h[index] / mask.shape[0] * mask.shape[1]))
+
+
+@numba.jit()
+def find_largest_rectangle(img1, img2, SHOW=True):
+    roi1 = crop_largest_rectangle_with_original_ratio(img1)
+    roi2 = crop_largest_rectangle_with_original_ratio(img2)
+    if roi1[3] < roi2[3]:
+        index1 = (roi1[0], roi1[1])
+        shift_h = int((roi2[2] - roi1[2]) / 2)
+        shift_w = int((roi2[3] - roi1[3]) / 2)
+        h = roi1[2]
+        w = roi1[3]
+        index2 = (roi2[0] + shift_h, roi2[1] + shift_w)
+    else:
+        index2 = (roi2[0], roi2[1])
+        shift_h = int((roi1[2] - roi2[2]) / 2)
+        shift_w = int((roi1[3] - roi2[3]) / 2)
+        h = roi2[2]
+        w = roi2[3]
+        index1 = (roi1[0] + shift_h, roi2[1] + shift_w)
+
+    index_botright_1 = (int(index1[0] + h), int(index1[1] + w))
+    index_botright_2 = (int(index2[0] + h), int(index2[1] + w))
+
+    size = (img1.shape[1], img1.shape[0])
+    out1 = cv2.resize(img1[index1[0]:index_botright_1[0],
+                      index1[1]:index_botright_1[1]], size)
+    out2 = cv2.resize(img2[index2[0]:index_botright_2[0],
+                      index2[1]:index_botright_2[1]], size)
+    # display
+    if SHOW:
+        demo1 = cv2.rectangle(img1, index1[::-1],
+                              index_botright_1[::-1],
+                              (0, 255, 0), thickness=1)
+        demo2 = cv2.rectangle(img2, index2[::-1],
+                              index_botright_2[::-1],
+                              (0, 255, 0), thickness=1)
+        comparison = np.concatenate([demo1, demo2], axis=1)
+        cv2.imwrite('crop_demo.png', comparison)
+        cv2.imshow("Visualization of Largest Rectangle Found", comparison)
+        cv2.waitKey(0)
+        selected = np.concatenate([out1, out2], axis=1)
+        cv2.imshow("Selected Region", selected)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+    return out1, out2
+
+
+def img_rectify(img1, img2, Camera2, Camera3, R_diff, T_diff):
+    R1, R2, P1, P2, _, _, _ = cv2.stereoRectify(cameraMatrix1=Camera2.CamMatrix, cameraMatrix2=Camera3.CamMatrix,
+                                                distCoeffs1=Camera2.DistCoef, distCoeffs2=Camera3.DistCoef,
+                                                R=R_diff, T=T_diff, imageSize=Camera2.shape,)
+    map1x, map1y = cv2.initUndistortRectifyMap(cameraMatrix=Camera2.CamMatrix, distCoeffs=Camera2.DistCoef, R=R1,
+                                               newCameraMatrix=P1, size=Camera2.shape[::-1], m1type=cv2.CV_32F)
+    map2x, map2y = cv2.initUndistortRectifyMap(cameraMatrix=Camera3.CamMatrix, distCoeffs=Camera3.DistCoef, R=R2,
+                                               newCameraMatrix=P2, size=Camera3.shape[::-1], m1type=cv2.CV_32F)
+    img_rec = cv2.remap(img1, map1x, map1y, cv2.INTER_LINEAR)
+    img_rec2 = cv2.remap(img2, map2x, map2y, cv2.INTER_LINEAR)
+    return find_largest_rectangle(img_rec, img_rec2, SHOW=False)
+
+
 if __name__ == '__main__':
 
     ITER = 1  # Number of random sampling for rotation and translation per image
@@ -64,166 +160,47 @@ if __name__ == '__main__':
     TESTPATH_TXT = '../Test/rectified information.txt'
     VALIPATH_IMG = '../Validation/Image/'
     VALIPATH_TXT = '../Validation/rectified information.txt'
-    img_rec = []  # List for storing rectified images
     weight_path = '../Weight/'
+
+    # Weight for label
+    Weight = np.array([[0.082], [3.704], [3.72], [1.0], [1.0], [1.0]])
 
     # Get camera parameter
     Cam2 = data_read.CAM(2)
     Cam3 = data_read.CAM(3)
-    # R_rec, T_rec = data_read.rand_transformation(Cam3.Rotation, Cam3.Translation, 0.05, 0.1, ROTATION=False, TRANSLATION=True)
-    changed_vec_rot = np.array([[0.0], [0.0], [0.1]])
-    R_rec = cv2.Rodrigues(cv2.Rodrigues(Cam3.Rotation)[0] + changed_vec_rot)[0]
-    R_diff1 = np.dot(np.linalg.inv(Cam2.Rotation), R_rec)
-    R_diff2 = np.dot(np.linalg.inv(Cam2.Rotation), Cam3.Rotation)
-    # R_diff = np.dot(inv(Cam2.Rotation), Cam3.Rotation)
 
-    changed_vec_trans = np.array([[0.0], [0.1], [0.0]])
-    T_rec = Cam3.Translation + changed_vec_trans
-    # T_diff = Cam2.Translation - Cam3.Translation
-    T_diff1 = Cam2.Translation - T_rec
-    T_diff2 = Cam2.Translation - Cam3.Translation
+    # FILE FOR SAVING RECTIFIED INFORMATION
+    file = open(TRAINPATH_TXT, 'a')  # Write rotation and translation information
 
-    # Calculate rectified information
-    # RecRotationNorm = np.linalg.norm(cv2.Rodrigues(np.dot(np.linalg.inv(Cam3.Rotation), R_rec))[0])/(0.05 * math.sqrt(3))
-    # RecTranslationNorm = np.linalg.norm(T_rec - Cam3.Translation)/(0.1 * math.sqrt(3))
-    # print(T_rec - Cam3.Translation)
-    # print(RecTranslationNorm)
+    # Iterations for getting datasets
+    for i in range(Cam2.size):
+        imgL = cv2.imread(Cam2.img_list[i])
+        imgR = cv2.imread(Cam3.img_list[i])
+        for j in ITER:
+            # Get Random Rotation and Translation
+            R_rec, T_rec, Rectified_rot, Rectified_trans = data_read.rand_transformation(
+                Cam3.Rotation, Cam3.Translation, 0.05, 0.1, ROTATION=True, TRANSLATION=True)
+            R_diff = np.dot(inv(Cam2.Rotation), R_rec)
+            T_diff = Cam2.Translation - T_rec
 
-    R1, R2, P1, P2, _, roi1, roi2 = cv2.stereoRectify(cameraMatrix1=Cam2.CamMatrix, cameraMatrix2=Cam3.CamMatrix,
-                                                distCoeffs1=Cam2.DistCoef, distCoeffs2=Cam3.DistCoef,
-                                                R=R_diff1, T=T_diff1, imageSize=Cam2.shape, )
+            # Get rectified two images
+            imgL_rec, imgR_rec = img_rectify(img1=imgL, img2=imgR, Camera2=Cam2, Camera3=Cam3, R_diff=R_diff, T_diff=T_diff)
 
-    R3, R4, P3, P4, _, _, _ = cv2.stereoRectify(cameraMatrix1=Cam2.CamMatrix, cameraMatrix2=Cam3.CamMatrix,
-                                                      distCoeffs1=Cam2.DistCoef, distCoeffs2=Cam3.DistCoef,
-                                                      R=R_diff2, T=T_diff2, imageSize=Cam2.shape)
+            # SAVE IMG
+            cv2.imwrite(TRAINPATH_IMG + 'image02_' + int2str(ITER * i + j, MIN_LEN) + '.png', imgL_rec)
+            cv2.imwrite(TRAINPATH_IMG + 'image03_' + int2str(ITER * i + j, MIN_LEN) + '.png', imgR_rec)
 
+            # Calculate rectified information
+            RecInfo = np.sum(Rectified_rot * Weight[3:6] / 0.05 + Rectified_trans * Weight[:3] / 0.1)
 
-    print('rotation_vec1', cv2.Rodrigues(np.dot(inv(R1), R3))[0])
-
-    # print('rotation_vec2', cv2.Rodrigues(np.dot(inv(R2), R4))[0])
-
-    map1x, map1y = cv2.initUndistortRectifyMap(cameraMatrix=Cam2.CamMatrix, distCoeffs=Cam2.DistCoef, R=R1,
-                                               newCameraMatrix=P1, size=Cam2.shape[::-1], m1type=cv2.CV_32F)
-    map2x, map2y = cv2.initUndistortRectifyMap(cameraMatrix=Cam2.CamMatrix, distCoeffs=Cam2.DistCoef, R=R3,
-                                               newCameraMatrix=P3, size=Cam3.shape[::-1], m1type=cv2.CV_32F)
-    img = cv2.imread(Cam2.img_list[1])
-    img2 = cv2.imread(Cam3.img_list[1])
-    img_rec = cv2.remap(img, map1x, map1y, cv2.INTER_LINEAR)
-
-    cv2.imshow('img_rec', img_rec)
-    cv2.waitKey(0)
-    # cv2.imwrite(weight_path + 'raw.png', img_rec)
+            # SAVE LABEL
+            np.savetxt(file, RecInfo, fmt='%.5f')
+    file.close()
 
 
-    # R3, R4, P3, P4, _, _, _ = cv2.stereoRectify(cameraMatrix1=Cam2.CamMatrix, cameraMatrix2=Cam3.CamMatrix,
-    #                                                   distCoeffs1=Cam2.DistCoef, distCoeffs2=Cam3.DistCoef,
-    #                                                   R=R_diff2, T=T_diff, imageSize=Cam2.shape)
-
-    #
-    # map1x, map1y = cv2.initUndistortRectifyMap(cameraMatrix=Cam2.CamMatrix, distCoeffs=Cam2.DistCoef, R=R1,
-    #                                            newCameraMatrix=P1, size=Cam2.shape[::-1], m1type=cv2.CV_32F)
-    #
-    # map2x, map2y = cv2.initUndistortRectifyMap(cameraMatrix=Cam3.CamMatrix, distCoeffs=Cam3.DistCoef, R=R2,
-    #                                            newCameraMatrix=P2, size=Cam3.shape[::-1], m1type=cv2.CV_32F)
-    #
-    # img = cv2.imread(Cam2.img_list[1])
-    #
-    # img_rec = cv2.remap(img, map1x, map1y, cv2.INTER_LINEAR)
-    # # img_rec2 = img_rec[y: y + h, x: x + w, :]
-    # cv2.imshow('img_rec', img_rec)
-    # # cv2.imshow('img_rec2', img_rec2)
-    # cv2.waitKey(0)
-    # # print(np.shape(img_rec))
 
 
-    # map2x, map2y = cv2.initUndistortRectifyMap(cameraMatrix=K[:, :, 3], distCoeffs=D[:, 3], R=R2,
-    #                                            newCameraMatrix=P2, size=(1500, 700), m1type=cv2.CV_32F)
-    # print(roi1)
-    # print(roi2)
-    # img_rec = cv2.remap(img1, map1x, map1y, cv2.INTER_LINEAR)
-    # img_rec2 = cv2.remap(img2, map2x, map2y, cv2.INTER_LINEAR)
-    # img_rec_roi = img_rec[roi1[0]:roi1[0] + roi1[2], roi1[1]:roi1[1] + roi1[3], :]
-    # img_rec_roi2 = img_rec2[roi2[0]:roi2[0] + roi2[2], roi2[1]:roi2[1] + roi2[3], :]
-    # cv2.imshow('raw', img_rec)
-    # cv2.imshow('s', img_rec_roi)
-    # cv2.imshow('s2', img_rec_roi2)
-    # cv2.waitKey(0)
-
-    # Get threshold for random sampling
-    # [R_thresh, T_thresh] = data_read.set_threshold(R, T)
-
-    # For relative difference
-    # R_diff = np.dot(np.linalg.inv(R[:, :, 2]), R[:, :, 3])
-
-    # print(R_diff_norm)
-    # T_diff = np.dot(np.linalg.inv(R[:, :, 2]), T[:, 2] - T[:, 3])
-
-    # path = '/home/open/eth/2020spring/PLR/Raw Data/2011_09_26/2011_09_26_drive_0001_extract/image_02/data/0000000006.png'
-    # img = cv2.imread(path)
-    # height, width = img.shape[:2]
-    # newcameramtx, roi = cv2.getOptimalNewCameraMatrix(K[:, :, 2], D[:, 2], (width, height), 1, (width, height))
-    # dst = cv2.undistort(img, K[:, :, 2], D[:, 2], None, newcameramtx)
-    # x, y, w, h = roi
-    # print(roi)
-    # dst_roi = dst[y:y+h, x:x+w, :]
-    # cv2.imshow('dst', dst)
-    # cv2.imshow('dst_roi', dst_roi)
-    # cv2.waitKey(0)
-
-    # path1 = '/home/open/eth/2020spring/PLR/Raw Data/2011_09_26/2011_09_26_drive_0001_extract/image_02/data/0000000000.png'
-    # path2 = '/home/open/eth/2020spring/PLR/Raw Data/2011_09_26/2011_09_26_drive_0001_extract/image_03/data/0000000000.png'
-    # img1 = cv2.imread(path1)
-    # img2 = cv2.imread(path2)
-    # # R_diff = np.dot(np.linalg.inv(R[:, :, 2]), R[:, :, 3])
-    # # T_diff = np.dot(np.linalg.inv(R[:, :, 2]), T[:, 2] - T[:, 3])
-    # [R_rand, T_rand] = data_read.rand_transformation(R[:, :, 3], T[:, 3], R_thresh, T_thresh, BOOL, BOOL)
-    # R_diff = np.dot(np.linalg.inv(R[:, :, 2]), R_rand)
-    # T_diff = T[:, 2] - T_rand
-    # R1, R2, P1, P2, _, roi1, roi2 = cv2.stereoRectify(cameraMatrix1=K[:, :, 2], cameraMatrix2=K[:, :, 3],
-    #                                             distCoeffs1=D[:, 2], distCoeffs2=D[:, 3],
-    #                                             R=R_diff, T=T_diff, imageSize=np.shape(img1[:, :, 2]), alpha=0)
-    #
-    # map1x, map1y = cv2.initUndistortRectifyMap(cameraMatrix=K[:, :, 2], distCoeffs=D[:, 2], R=R1,
-    #                                            newCameraMatrix=P1, size=(1500, 700), m1type=cv2.CV_32F)
-    # map2x, map2y = cv2.initUndistortRectifyMap(cameraMatrix=K[:, :, 3], distCoeffs=D[:, 3], R=R2,
-    #                                            newCameraMatrix=P2, size=(1500, 700), m1type=cv2.CV_32F)
-    # print(roi1)
-    # print(roi2)
-    # img_rec = cv2.remap(img1, map1x, map1y, cv2.INTER_LINEAR)
-    # img_rec2 = cv2.remap(img2, map2x, map2y, cv2.INTER_LINEAR)
-    # img_rec_roi = img_rec[roi1[0]:roi1[0] + roi1[2], roi1[1]:roi1[1] + roi1[3], :]
-    # img_rec_roi2 = img_rec2[roi2[0]:roi2[0] + roi2[2], roi2[1]:roi2[1] + roi2[3], :]
-    # cv2.imshow('raw', img_rec)
-    # cv2.imshow('s', img_rec_roi)
-    # cv2.imshow('s2', img_rec_roi2)
-    # cv2.waitKey(0)
 
 
-    # # Iteration for getting random dataset
-    # img_len = len(img[0])
-    # file = open(VALIPATH_TXT, 'a')
-    # # file = open(TESTPATH_TXT, 'a')
-    # # file = open(TRAINPATH_TXT, 'a')  # Write rotation and translation information
-    # for i in range(img_len):
-    #     for j in range(ITER):
-    #         [R_rand, T_rand] = data_read.rand_transformation(R[:, :, 3], T[:, 3], R_thresh, T_thresh, BOOL, BOOL)
-    #         img_rec.append(img_rectify(img[2][i], img[3][i], R[:, :, 2], R_rand, T[:, 2], T_rand, D[:, 2], D[:, 3]))
-    #         # Save rectified image
-    #         # cv2.imwrite(TRAINPATH_IMG + 'image02_' + int2str(ITER * i + j, MIN_LEN) + '.png', img_rec[ITER * i + j][0])
-    #         # cv2.imwrite(TRAINPATH_IMG + 'image03_' + int2str(ITER * i + j, MIN_LEN) + '.png', img_rec[ITER * i + j][1])
-    #         # cv2.imwrite(TESTPATH_IMG + 'image02_' + int2str(ITER * i + j, MIN_LEN) + '.png', img_rec[ITER * i + j][0])
-    #         # cv2.imwrite(TESTPATH_IMG + 'image03_' + int2str(ITER * i + j, MIN_LEN) + '.png', img_rec[ITER * i + j][1])
-    #         cv2.imwrite(VALIPATH_IMG + 'image02_' + int2str(ITER * i + j, MIN_LEN) + '.png', img_rec[ITER * i + j][0])
-    #         cv2.imwrite(VALIPATH_IMG + 'image03_' + int2str(ITER * i + j, MIN_LEN) + '.png', img_rec[ITER * i + j][1])
-    #
-    #         # Save rectified rotation and translation
-    #         R_rec = float('%.9e' % np.linalg.norm(cv2.Rodrigues(np.dot(inv(R[:, :, 3]), R_rand))[0]))
-    #         T_rec = float('%.9e' % np.linalg.norm(T[:, 3] - T_rand))
-    #         R_relative = R_rec / R_diff_norm
-    #         T_relative = T_rec / T_diff_norm
-    #
-    #         image2_name = 'image02_' + int2str(ITER * i + j, MIN_LEN) + '.png'
-    #         image3_name = 'image03_' + int2str(ITER * i + j, MIN_LEN) + '.png'
-    #         savefile = np.array([image2_name, image3_name, R_relative, T_relative]).reshape([1, 4])
-    #         np.savetxt(file, savefile, fmt='%s')
-    # file.close()
+
+
