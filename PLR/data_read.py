@@ -24,65 +24,66 @@ T = np.zeros([3, 4])
 D = np.zeros([5, 4])
 
 
-def read_exparam():
-    """
-    Read raw parameters for both intrinsic and extrinsic parameters
-    :return:
-    """
-    f = open(dirpath_parm, 'r')
-    lines = f.readlines()
-    for line in lines:
-        for i in range(4):
-            if keyword[i][0] in line:
-                line = line.lstrip(keyword[i][0])
-                R[:, :, i] = np.array(list(map(float, line.split()))).reshape((3, 3))
-            elif keyword[i][1] in line:
-                line = line.lstrip(keyword[i][1])
-                T[:, i] = np.array(list(map(float, line.split())))
-            elif keyword[i][2] in line:
-                line = line.lstrip(keyword[i][2])
-                K[:, :, i] = np.array(list(map(float, line.split()))).reshape((3, 3))
-            elif keyword[i][3] in line:
-                line = line.lstrip(keyword[i][3])
-                D[:, i] = np.array(list(map(float, line.split())))
-            elif keyword[i][4] in line:
-                line = line.lstrip(keyword[i][4])
-                R_rec[:, :, i] = np.array(list(map(float, line.split()))).reshape((3, 3))
-    return [R, K, T, D, R_rec]
+class CAM():
+    def __init__(self, i):
+        R, K, T, D, R_rec = self.read_exparam()
+        img_list = self.read_img()
+        self.CamMatrix = K[:, :, i]
+        self.Translation = T[:, i].reshape([3, 1])
+        self.Rotation = np.dot(R[:, :, i], R_rec[:, :, i])
+        self.DistCoef = 0
+        self.img_list = img_list[i]
+        self.shape = cv2.imread(self.img_list[1]).shape[:2]
+        self.size = len(self.img_list)
+
+    def read_exparam(self):
+        """
+        Read raw parameters for both intrinsic and extrinsic parameters
+        :return:
+        """
+        f = open(dirpath_parm, 'r')
+        lines = f.readlines()
+        for line in lines:
+            for i in range(4):
+                if keyword[i][0] in line:
+                    line = line.lstrip(keyword[i][0])
+                    R[:, :, i] = np.array(list(map(float, line.split()))).reshape((3, 3))
+                elif keyword[i][1] in line:
+                    line = line.lstrip(keyword[i][1])
+                    T[:, i] = np.array(list(map(float, line.split())))
+                elif keyword[i][2] in line:
+                    line = line.lstrip(keyword[i][2])
+                    K[:, :, i] = np.array(list(map(float, line.split()))).reshape((3, 3))
+                elif keyword[i][3] in line:
+                    line = line.lstrip(keyword[i][3])
+                    D[:, i] = np.array(list(map(float, line.split())))
+                elif keyword[i][4] in line:
+                    line = line.lstrip(keyword[i][4])
+                    R_rec[:, :, i] = np.array(list(map(float, line.split()))).reshape((3, 3))
+        return R, K, T, D, R_rec
+
+    def read_img(self):
+        """
+        Read Raw Image
+        :return:
+        """
+        cam0, cam1, cam2, cam3 = [], [], [], []
+        file_cam0 = sorted(os.listdir(dirpath_img[0]))
+        file_cam1 = sorted(os.listdir(dirpath_img[1]))
+        file_cam2 = sorted(os.listdir(dirpath_img[2]))
+        file_cam3 = sorted(os.listdir(dirpath_img[3]))
+        for file in file_cam0:
+            cam0.append(os.path.join(dirpath_img[0], file))
+        for file in file_cam1:
+            cam0.append(os.path.join(dirpath_img[1], file))
+        for file in file_cam2:
+            cam2.append(os.path.join(dirpath_img[2], file))
+        for file in file_cam3:
+            cam3.append(os.path.join(dirpath_img[3], file))
+        return [cam0, cam1, cam2, cam3]
 
 
-def read_img():
-    """
-    Read Raw Image
-    :return:
-    """
-    cam2 = []
-    cam3 = []
-    file_cam2 = sorted(os.listdir(dirpath_img[2]))
-    file_cam3 = sorted(os.listdir(dirpath_img[3]))
-    for file in file_cam2:
-        cam2.append(os.path.join(dirpath_img[2], file))
-    for file in file_cam3:
-        cam3.append(os.path.join(dirpath_img[3], file))
-    return cam2, cam3
-
-
-def set_threshold(R_set, T_set):
-    """
-    Set randomly sampling threshold according to raw rotation angles and translation between cam2 and cam3
-    :param R_set: rotation set
-    :param T_set: translation set
-    :return:
-    """
-    R_diff = np.dot(np.linalg.inv(R_set[:, :, 2]), R_set[:, :, 3])
-    Rot_vec = cv2.Rodrigues(R_diff)[0]
-    Rot_threshold = 0.1*np.linalg.norm(Rot_vec)
-    Trans_diff = T_set[:, 2]-T_set[:, 3]
-    Trans_threshold = 0.1*np.linalg.norm(Trans_diff)
-    return [Rot_threshold, Trans_threshold]
-
-
-def rand_transformation(rot, trans, R_threshold, T_threshold, ROTATION = True, TRANSLATION = True):
+def rand_transformation(rot, trans, R_threshold, T_threshold, ROTATION=True, TRANSLATION=True):
     """
     Fixed cam2, and randomly change rotation and translation of cam3
     :param rot: raw rotation matrix needed to be changed
@@ -95,12 +96,11 @@ def rand_transformation(rot, trans, R_threshold, T_threshold, ROTATION = True, T
     """
     if ROTATION:
         rot_vec = cv2.Rodrigues(rot)[0]
-        new_rot_vec = rot_vec + R_threshold*np.random.rand(3, 1)
-        new_rot = cv2.Rodrigues(new_rot_vec)[0]
+        new_rot_vec = rot_vec + R_threshold * np.random.uniform(low=-1, high=1, size=(3, 1))
+        rot = cv2.Rodrigues(new_rot_vec)[0]
     if TRANSLATION:
-        new_trans_vec = trans + T_threshold*np.random.rand(3)
-    return [new_rot, new_trans_vec]
-
+        trans = trans + T_threshold * np.random.uniform(low=-1, high=1, size=(3, 1))
+    return rot, trans
 
 
 
