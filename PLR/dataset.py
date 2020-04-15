@@ -2,6 +2,8 @@ import data_read
 import numpy as np
 import cv2
 from numpy.linalg import inv
+import math
+
 
 
 def get_homography(R1, R2, K1, K2):
@@ -36,7 +38,7 @@ def img_rectify(im1, im2, rot1, rot2, trans1, trans2, dist1, dist2):
     [h1, h2] = get_homography(R1, R2, K[:, :, 2], K[:, :, 3])
     img1 = cv2.warpPerspective(im1, h1, (HEIGHT, WIDTH))
     img2 = cv2.warpPerspective(im2, h2, (HEIGHT, WIDTH))
-    return [img1, img2]
+    return img1, img2
 
 
 def int2str(num, min_len):
@@ -63,14 +65,89 @@ if __name__ == '__main__':
     VALIPATH_IMG = '../Validation/Image/'
     VALIPATH_TXT = '../Validation/rectified information.txt'
     img_rec = []  # List for storing rectified images
+    weight_path = '../Weight/'
 
-    # Get intrinsic and extrinsic parameter
-    [R, K, T, D, R_rec] = data_read.read_exparam()
+    # Get camera parameter
+    Cam2 = data_read.CAM(2)
+    Cam3 = data_read.CAM(3)
+    # R_rec, T_rec = data_read.rand_transformation(Cam3.Rotation, Cam3.Translation, 0.05, 0.1, ROTATION=False, TRANSLATION=True)
+    changed_vec_rot = np.array([[0.0], [0.0], [0.1]])
+    R_rec = cv2.Rodrigues(cv2.Rodrigues(Cam3.Rotation)[0] + changed_vec_rot)[0]
+    R_diff1 = np.dot(np.linalg.inv(Cam2.Rotation), R_rec)
+    R_diff2 = np.dot(np.linalg.inv(Cam2.Rotation), Cam3.Rotation)
+    # R_diff = np.dot(inv(Cam2.Rotation), Cam3.Rotation)
 
-    # Get Raw Image
-    img2_list, img3_list = data_read.read_img()
-    width = np.size(cv2.imread(img2_list[0]), 1)
-    height = np.size(cv2.imread(img2_list[0]), 0)
+    changed_vec_trans = np.array([[0.0], [0.1], [0.0]])
+    T_rec = Cam3.Translation + changed_vec_trans
+    # T_diff = Cam2.Translation - Cam3.Translation
+    T_diff1 = Cam2.Translation - T_rec
+    T_diff2 = Cam2.Translation - Cam3.Translation
+
+    # Calculate rectified information
+    # RecRotationNorm = np.linalg.norm(cv2.Rodrigues(np.dot(np.linalg.inv(Cam3.Rotation), R_rec))[0])/(0.05 * math.sqrt(3))
+    # RecTranslationNorm = np.linalg.norm(T_rec - Cam3.Translation)/(0.1 * math.sqrt(3))
+    # print(T_rec - Cam3.Translation)
+    # print(RecTranslationNorm)
+
+    R1, R2, P1, P2, _, roi1, roi2 = cv2.stereoRectify(cameraMatrix1=Cam2.CamMatrix, cameraMatrix2=Cam3.CamMatrix,
+                                                distCoeffs1=Cam2.DistCoef, distCoeffs2=Cam3.DistCoef,
+                                                R=R_diff1, T=T_diff1, imageSize=Cam2.shape, )
+
+    R3, R4, P3, P4, _, _, _ = cv2.stereoRectify(cameraMatrix1=Cam2.CamMatrix, cameraMatrix2=Cam3.CamMatrix,
+                                                      distCoeffs1=Cam2.DistCoef, distCoeffs2=Cam3.DistCoef,
+                                                      R=R_diff2, T=T_diff2, imageSize=Cam2.shape)
+
+
+    print('rotation_vec1', cv2.Rodrigues(np.dot(inv(R1), R3))[0])
+
+    # print('rotation_vec2', cv2.Rodrigues(np.dot(inv(R2), R4))[0])
+
+    map1x, map1y = cv2.initUndistortRectifyMap(cameraMatrix=Cam2.CamMatrix, distCoeffs=Cam2.DistCoef, R=R1,
+                                               newCameraMatrix=P1, size=Cam2.shape[::-1], m1type=cv2.CV_32F)
+    map2x, map2y = cv2.initUndistortRectifyMap(cameraMatrix=Cam2.CamMatrix, distCoeffs=Cam2.DistCoef, R=R3,
+                                               newCameraMatrix=P3, size=Cam3.shape[::-1], m1type=cv2.CV_32F)
+    img = cv2.imread(Cam2.img_list[1])
+    img2 = cv2.imread(Cam3.img_list[1])
+    img_rec = cv2.remap(img, map1x, map1y, cv2.INTER_LINEAR)
+
+    cv2.imshow('img_rec', img_rec)
+    cv2.waitKey(0)
+    # cv2.imwrite(weight_path + 'raw.png', img_rec)
+
+
+    # R3, R4, P3, P4, _, _, _ = cv2.stereoRectify(cameraMatrix1=Cam2.CamMatrix, cameraMatrix2=Cam3.CamMatrix,
+    #                                                   distCoeffs1=Cam2.DistCoef, distCoeffs2=Cam3.DistCoef,
+    #                                                   R=R_diff2, T=T_diff, imageSize=Cam2.shape)
+
+    #
+    # map1x, map1y = cv2.initUndistortRectifyMap(cameraMatrix=Cam2.CamMatrix, distCoeffs=Cam2.DistCoef, R=R1,
+    #                                            newCameraMatrix=P1, size=Cam2.shape[::-1], m1type=cv2.CV_32F)
+    #
+    # map2x, map2y = cv2.initUndistortRectifyMap(cameraMatrix=Cam3.CamMatrix, distCoeffs=Cam3.DistCoef, R=R2,
+    #                                            newCameraMatrix=P2, size=Cam3.shape[::-1], m1type=cv2.CV_32F)
+    #
+    # img = cv2.imread(Cam2.img_list[1])
+    #
+    # img_rec = cv2.remap(img, map1x, map1y, cv2.INTER_LINEAR)
+    # # img_rec2 = img_rec[y: y + h, x: x + w, :]
+    # cv2.imshow('img_rec', img_rec)
+    # # cv2.imshow('img_rec2', img_rec2)
+    # cv2.waitKey(0)
+    # # print(np.shape(img_rec))
+
+
+    # map2x, map2y = cv2.initUndistortRectifyMap(cameraMatrix=K[:, :, 3], distCoeffs=D[:, 3], R=R2,
+    #                                            newCameraMatrix=P2, size=(1500, 700), m1type=cv2.CV_32F)
+    # print(roi1)
+    # print(roi2)
+    # img_rec = cv2.remap(img1, map1x, map1y, cv2.INTER_LINEAR)
+    # img_rec2 = cv2.remap(img2, map2x, map2y, cv2.INTER_LINEAR)
+    # img_rec_roi = img_rec[roi1[0]:roi1[0] + roi1[2], roi1[1]:roi1[1] + roi1[3], :]
+    # img_rec_roi2 = img_rec2[roi2[0]:roi2[0] + roi2[2], roi2[1]:roi2[1] + roi2[3], :]
+    # cv2.imshow('raw', img_rec)
+    # cv2.imshow('s', img_rec_roi)
+    # cv2.imshow('s2', img_rec_roi2)
+    # cv2.waitKey(0)
 
     # Get threshold for random sampling
     # [R_thresh, T_thresh] = data_read.set_threshold(R, T)
