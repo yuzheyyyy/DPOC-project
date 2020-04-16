@@ -5,8 +5,8 @@ import math
 
 
 # Parameter Setting
-storeIntervalPre = 1000
-lrInterval = 50000
+storeIntervalPre = 100
+lrInterval = 5000
 batchSize = 1600
 
 
@@ -67,7 +67,6 @@ def train(model, train_loader, optimizer, num, device):
     model.train()
     for idx, (BatchData, BatchLabel) in enumerate(train_loader):
         BatchData, BatchLabel = BatchData.to(device), BatchLabel.to(device)
-        print('BatchData', BatchData.shape)
         # calculate prediction and loss
         pred = model(BatchData)
         loss = criterion_loss(pred, BatchLabel)
@@ -82,8 +81,8 @@ def train(model, train_loader, optimizer, num, device):
         if not num % lrInterval:
             for param in optimizer.param_groups:
                 param['lr'] *= 0.5
-        if not num % 100: print('Train Loss:', loss.item())
-    return loss, num
+        if not num % 10: print('Train Loss:', loss.item())
+    return loss.item(), num
 
 
 def test(model, test_loader, device, num):
@@ -95,7 +94,7 @@ def test(model, test_loader, device, num):
         loss = criterion_loss(pred, BatchLabel)
         test_loss += loss.item()
         num += 1
-        if not num % 100: print('Test Loss:', loss.item())
+        if not num % 10: print('Test Loss:', loss.item())
     return loss, num
 
 

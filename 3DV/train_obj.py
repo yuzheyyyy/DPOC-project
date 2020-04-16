@@ -16,7 +16,7 @@ if __name__ == '__main__':
     # Parameters setting
     inputSize = 42
     channels =3
-    trainingLimit = 300000
+    trainingLimit = 30000
     trainingImages = 100
     trainingPatches = 512
     BATCHSIZE = 64
@@ -65,18 +65,11 @@ if __name__ == '__main__':
 
     # For recording
     trainfile = open('./Model parameter/training_loss_obj.txt', 'a')
-    loss_list = []
     time_start = time.time()
-
-    # OBJ_NET
-    # OBJ_NET = OBJ_CNN()
-    # OBJ_NET.load_state_dict(torch.load('./Model parameter/obj_model_init.pkl'))
-    # OBJ_NET.to(DEVICE)
 
     # Validation parameter
     ValiCounter = 0
     ValiLimit = 40000
-
 
     # Iteration for training
     while trainCounter <= trainingLimit:
@@ -84,16 +77,15 @@ if __name__ == '__main__':
         print('Starting Round:', round)
         # For training
         train_loader = torch.utils.data.DataLoader(TrainData, batch_size=BATCHSIZE, shuffle=True, num_workers=8)
-        print('Train_loader is OK')
         loss, trainCounter = Model_obj.train(OBJ_NET, train_loader, optimizer, trainCounter, DEVICE)
         # For testing
-        test_loader = torch.utils.data.DataLoader(TestData, batch_size=BATCHSIZE, shuffle=True, num_workers=8)
-        loss, ValiCounter = Model_obj.test(OBJ_NET, test_loader, DEVICE, ValiCounter)
+        # test_loader = torch.utils.data.DataLoader(TestData, batch_size=BATCHSIZE, shuffle=True, num_workers=8)
+        # loss, ValiCounter = Model_obj.test(OBJ_NET, test_loader, DEVICE, ValiCounter)
         # For recording
-        np.savetxt(trainfile, np.array([round, loss]))
-        loss_list.append(loss)
+        np.savetxt(trainfile, np.array([loss]))
         time_end = time.time()
         print('Time Cost:', time_end - time_start)
+    trainfile.close()
 
 
 
