@@ -34,33 +34,36 @@ def NameChange(filepath, num):
             n_pose += 1
 
 
-def Move_file(filepath):
-    basepath = '/home/open/eth/2020spring/3DV/Project/Python/test/scene/'
+def Move_file(oldpath, newpath):
     subpath = ['rgb_noseg/', 'depth_noseg/', 'poses/']
-    file = sorted(os.listdir(filepath))
+    file = sorted(os.listdir(oldpath))
     for i in file:
         if os.path.splitext(i)[1] == '.png':
             # Move RGB file
             if util.endsWith(os.path.splitext(i)[0], '.color'):
-                oldpath_RGB = filepath + os.path.splitext(i)[0] + '.png'
-                newpath_RGB = basepath + subpath[0] + os.path.splitext(i)[0] + '.png'
+                oldpath_RGB = oldpath + os.path.splitext(i)[0] + '.png'
+                newpath_RGB = newpath + subpath[0] + os.path.splitext(i)[0] + '.png'
                 shutil.move(oldpath_RGB, newpath_RGB)
             # Move Depth file
             if util.endsWith(os.path.splitext(i)[0], '.depth'):
-                oldpath_Depth = filepath + os.path.splitext(i)[0] + '.png'
-                newpath_Depth = basepath + subpath[1] + os.path.splitext(i)[0] + '.png'
+                oldpath_Depth = oldpath + os.path.splitext(i)[0] + '.png'
+                newpath_Depth = newpath + subpath[1] + os.path.splitext(i)[0] + '.png'
                 shutil.move(oldpath_Depth, newpath_Depth)
         else:
             # Move pose file
-            oldpath_pose = filepath + os.path.splitext(i)[0] + '.txt'
-            newpath_pose = basepath + subpath[2] + os.path.splitext(i)[0] + '.txt'
+            oldpath_pose = oldpath + os.path.splitext(i)[0] + '.txt'
+            newpath_pose = newpath + subpath[2] + os.path.splitext(i)[0] + '.txt'
             shutil.move(oldpath_pose, newpath_pose)
 
 
 if __name__ == '__main__':
-    basepath = '/home/open/eth/2020spring/3DV/Project/C++/DSAC/Data/chess/'
+    oldpath = './chess/'
+    newpath = './training/scene/'
     subpath_train = ['seq-01/', 'seq-02/', 'seq-04/', 'seq-06/']
     subpath_test = ['seq-03/', 'seq-05/']
     for i in range(2):
-        NameChange(basepath + subpath_test[i], i)
-        Move_file(basepath + subpath_test[i])
+        NameChange(oldpath + subpath_test[i], i)
+        Move_file(oldpath + subpath_test[i], newpath)
+    for i in range(4):
+        NameChange(oldpath + subpath_train[i], i)
+        Move_file(oldpath + subpath_train[i], newpath)
