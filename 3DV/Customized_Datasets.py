@@ -15,7 +15,7 @@ class RGB_DATASET(Dataset):
         self.transform = transform
 
     def __len__(self):
-        return 64
+        return 51200
 
     def __getitem__(self, item):
         imgIdx = np.random.randint(0, self.dataset.size())
